@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
 from scipy.optimize import curve_fit
-import matplotlib.pyplot as plt
-
 
 # Define the curve fitting function
 def fitting_function(x, A, B, C, D):

@@ -1,65 +1,92 @@
 import numpy as np
-from select import select
-# Assuming these imports match the structure of your converted Python modules
-from command_law import command_law
-from live_processing import live_processing
 import cv2
+import os
+from live_processing import live_processing
+from command_law import command_law
+from ga_operations import roulette_wheel_selection, single_point_crossover, mutate
 
+# Setup
+your_folder = '/path/to/your/folder'  # Update this path accordingly
+os.makedirs(your_folder, exist_ok=True)
+new_sub_folder = os.path.join(your_folder, 'Initial population')
+os.makedirs(new_sub_folder, exist_ok=True)
 
-def initialize_population(npop, n_genes):
-    """Initialize the population with random values."""
-    return np.random.rand(npop, n_genes)
+# Configuration for the production line and GA
+T = 1  # Total time
+N_Frame = 200
+t = np.linspace(0, T, N_Frame)
+xf = 0.09  # Movement distance of the bottle
+N = 4  # Number of genes
+npop = 16  # Population size
+maxit = 100  # Max iterations
+maxstall_gen = 2  # Stall generations
+obj_tol = 1e-4  # Objective tolerance
+Acceptable_obj_value = 1.6e-3  # Acceptable objective value
 
+# Initialize webcam
+vidObj = cv2.VideoCapture(0)  # Adjust the camera index
+ret, img_test = vidObj.read()
+if not ret:
+    print("Failed to grab a frame from the camera.")
+    exit()
 
-def evaluate_individual(individual):
-    vidObj = cv2.VideoCapture(0)
-    fitness = live_processing(vidObj, individual)  # Assuming live_processing can evaluate individual's fitness
-    return fitness
+# Assuming manual ROI selection; this could be automated as needed
+cv2.imshow('Select ROI and press ENTER', img_test)
+bbox = cv2.selectROI(img_test, False)
+cv2.destroyAllWindows()
+vidObj.release()  # Release the camera after setup
 
+# Initialize population and evaluate
+pop = np.zeros((npop, N + 1))  # Including cost
+for i in range(npop):
+    pop[i, :-1] = np.random.rand(N)  # Initialize with random values
+    pop[i, -1] = live_processing(pop[i, :-1], bbox)  # Dummy arguments for live_processing
 
-def genetic_algorithm(npop, n_genes, max_generations, fitness_threshold, stall_generations_limit):
-    population = initialize_population(npop, n_genes)
-    best_fitness = np.inf
-    best_individual = None
-    stall_generations = 0
+# Main GA loop
+stall_gen = 0
+gen = 1
+while gen <= maxit:
+    # Selection
+    selected = roulette_wheel_selection(pop, npop)
 
-    for generation in range(max_generations):
-        # Evaluate the fitness of each individual
-        fitness_scores = np.array([evaluate_individual(individual) for individual in population])
-        current_best_fitness = np.min(fitness_scores)
+    # Crossover
+    offspring = np.empty((0, N + 1))
+    for i in range(0, len(selected), 2):
+        parent1, parent2 = selected[i], selected[i + 1]
+        child1, child2 = single_point_crossover(parent1[:-1], parent2[:-1])
+        offspring = np.vstack((offspring, np.zeros((2, N + 1))))
+        offspring[-2, :-1], offspring[-1, :-1] = child1, child2
+        offspring[-2, -1] = live_processing(child1, bbox)  # Dummy arguments for live_processing
+        offspring[-1, -1] = live_processing(child2, bbox)
 
-        # Update best solution if current generation provides improvement
-        if current_best_fitness < best_fitness:
-            best_fitness = current_best_fitness
-            best_individual = population[np.argmin(fitness_scores)].copy()
-            stall_generations = 0
-        else:
-            stall_generations += 1
+    # Mutation
+    for i in range(len(offspring)):
+        offspring[i, :-1] = mutate(offspring[i, :-1])
+        offspring[i, -1] = live_processing(offspring[i, :-1], bbox)
 
-        # Check stopping criteria
-        if best_fitness <= fitness_threshold or stall_generations >= stall_generations_limit:
-            print(f"Stopping criteria met at generation {generation + 1}. Best fitness: {best_fitness}.")
+    # Combine and select the best to form the new population
+    combined = np.vstack((pop, offspring))
+    combined = combined[combined[:, -1].argsort()]  # Sort by cost
+    pop = combined[:npop, :]
+
+    # Update and display the best cost
+    print(f"Generation {gen}: Best Cost = {pop[0, -1]}")
+
+    # Stopping criteria check
+    if gen > 1 and np.abs(pop[0, -1] - best_cost) <= obj_tol and pop[0, -1] <= Acceptable_obj_value:
+        stall_gen += 1
+        if stall_gen >= maxstall_gen:
+            print("Optimization terminated due to stall generations limit.")
             break
+    else:
+        stall_gen = 0
+    best_cost = pop[0, -1]
 
-        # Genetic operations: Selection, Crossover, Mutation
-        # Implement your genetic operations here; this is a simplified placeholder logic
-        selected_indices = [select(fitness_scores) for _ in range(npop)]  # Selection
-        offspring = population[selected_indices].copy()  # Placeholder for Crossover & Mutation
+    if gen == maxit:
+        print("Optimization terminated due to maximum iterations.")
+        break
 
-        # Update population for the next generation
-        population = offspring
+    gen += 1
 
-    return best_individual, best_fitness
-
-
-# Configuration
-npop = 50  # Population size
-n_genes = 4  # Number of genes in an individual
-max_generations = 100  # Max number of generations
-fitness_threshold = 0.01  # Fitness threshold for stopping criteria
-stall_generations_limit = 10  # Max stall generations
-
-# Run the genetic algorithm
-best_individual, best_fitness = genetic_algorithm(npop, n_genes, max_generations, fitness_threshold,
-                                                  stall_generations_limit)
-print(f"Best Individual: {best_individual}, with fitness: {best_fitness}")
+# Finalize
+print("GA optimization completed.")
